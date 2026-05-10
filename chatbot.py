@@ -10,6 +10,7 @@ from groq import Groq
 load_dotenv()
 st.set_page_config(page_title="AI Book Finder", page_icon="📚")
 st.title("📚 AI Shopping Assistant")
+st.subheader("Ask for any books and place order!")
 
 # Initialize Groq Client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
