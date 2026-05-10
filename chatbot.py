@@ -1,110 +1,127 @@
 import os
 import pandas as pd
+import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 
 # -----------------------------
-# 🔐 Load API Key
+# 🔐 Setup & Page Config
 # -----------------------------
 load_dotenv()
+st.set_page_config(page_title="AI Book Finder", page_icon="📚")
+st.title("📚 AI Shopping Assistant")
+
+# Initialize Groq Client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # -----------------------------
-# 📦 Load dataset (NO scraping here)
+# 📦 Load dataset (Cached for speed)
 # -----------------------------
-df = pd.read_csv("books_data.csv")
+@st.cache_data
+def load_data():
+    # Ensure this file exists in your directory
+    return pd.read_csv("books_data.csv")
+
+df = load_data()
 
 # -----------------------------
-# 🧠 Memory storage
+# 🧠 Session State (Memory)
 # -----------------------------
-chat_history = []
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 # -----------------------------
 # 🔍 Search function
 # -----------------------------
 def search_products(df, query):
     query = query.lower()
-
     results = df[
         df["name"].str.lower().str.contains(query, na=False)
         | df["about"].str.lower().str.contains(query, na=False)
     ]
-
     return results.head(5)
 
 # -----------------------------
-# 🤖 Main chatbot function
+# 🤖 AI Logic
 # -----------------------------
-def ask_ai(user_query):
-
-    global chat_history
-
-    # 🔍 Step 1: search products
+def get_ai_response(user_query):
+    # 1. Search products
     results = search_products(df, user_query)
-
-    # 📦 Step 2: format products
-    product_text = ""
-
-    if results.empty:
-        product_text = "No matching products found."
-    else:
+    
+    product_text = "No matching products found." if results.empty else ""
+    if not results.empty:
         for _, row in results.iterrows():
-            product_text += f"""
-Name: {row['name']}
-Price: {row['price']}
-Rating: {row['rating']}
-About: {row['about']}
----
-"""
+            product_text += f"Name: {row['name']} | Price: {row['price']} | Rating: {row['rating']}\nAbout: {row['about']}\n---\n"
 
-    # 🧠 Step 3: system instruction
+    # 2. System Prompt
     system_prompt = f"""
-You are a smart e-commerce shopping assistant.
+    You are a smart e-commerce shopping assistant. 
+    Help users find books and recommend the best options.
+    
+    Available products from database:
+    {product_text}
 
-You help users find books and recommend best options.
+    Rules:
 
-Use conversation history for context.
+1. Be friendly, concise, and helpful.
 
-Available products:
-{product_text}
+2. Recommend the most suitable product based on the user's needs, preferences, and budget.
 
-Rules:
-- Be friendly and short
-- Recommend best product clearly
-- If user asks follow-up question, use previous context
-"""
+3. If no matching products are found, politely ask the user to try different keywords or refine their request.
 
-    # 💬 Step 4: build messages with memory
+4. Don't add to cart unless User says.
+
+5. Answer only the question the user has asked.
+
+6. Do NOT place or confirm an order automatically.
+
+7. Only confirm an order when the user explicitly says:
+   "Confirm my order"
+
+8. After the order is confirmed, ask for the shipping address.
+
+9. If the shipping address is incomplete or missing, politely ask again until all required details are provided:
+   - Address
+   - City
+   - Postcode
+   - Country
+
+10. Once the shipping details are complete, acknowledge the order and confirm that it has been placed successfully.
+    """
+
+    # 3. Build message context
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(chat_history)
+    # Add history from session state
+    for msg in st.session_state.messages:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
     messages.append({"role": "user", "content": user_query})
 
-    # 🤖 Step 5: call Groq API
+    # 4. API Call
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=messages
     )
-
-    reply = response.choices[0].message.content
-
-    # 💾 Step 6: save memory
-    chat_history.append({"role": "user", "content": user_query})
-    chat_history.append({"role": "assistant", "content": reply})
-
-    return reply
+    return response.choices[0].message.content
 
 # -----------------------------
-# 💬 Chat loop (run in terminal)
+# 🎨 UI Display
 # -----------------------------
-if __name__ == "__main__":
-    print("🛍️ AI Shopping Assistant Started (type 'exit' to stop)\n")
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    while True:
-        user_input = input("You: ")
+# Chat Input
+if prompt := st.chat_input("Search for a book... (e.g., 'fantasy novels under $20')"):
+    # User message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        if user_input.lower() == "exit":
-            print("Bye 👋")
-            break
-
-        response = ask_ai(user_input)
-        print("\nBot:", response)
+    # Assistant message
+    with st.chat_message("assistant"):
+        response = get_ai_response(prompt)
+        st.markdown(response)
+    
+    st.session_state.messages.append({"role": "assistant", "content": response})
